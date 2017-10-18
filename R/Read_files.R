@@ -1,0 +1,16 @@
+library(foreign)
+getwd()
+person_99 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_1999.dbf")
+person_00 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2000.dbf")
+person_01 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2001.dbf")
+person_02 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2002.dbf")
+person_03 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2003.dbf")
+person_04 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2004.dbf")
+person_05 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2005.DBF")
+person_06 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2006.DBF")
+person_07 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2007.dbf")
+person_08 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2008.DBF")
+person_09 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2009.DBF")
+person_10 <- foreign::read.dbf("data-raw/yearly_person_data/PERSON_2010.dbf")
+
+

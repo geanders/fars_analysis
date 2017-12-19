@@ -1,0 +1,180 @@
+---
+title: "cleaning_description"
+author: "Rebecca Foos"
+date: "November 1, 2017"
+output: word_document
+---
+```{r global_options}
+knitr::opts_chunk$set(eval = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r read from dbf}
+fars_dbf_to_csv <- function(year) {
+# Save the directory where .dbf files are saved.
+dir <- "data-raw/yearly_person_data"
+# Read the .dbf file for a year into R.
+person_data <- foreign::read.dbf(paste0(dir,"/PERSON_", year, ".DBF"))
+# Save each file as a csv to the "data-raw/yearly_person_data" directory.
+person_file <- paste0("data-raw/yearly_person_data/person_", year, ".csv")
+readr::write_csv(person_data,
+path = person_file)
+# Return NULL so that the function doesn't print out anything.
+return(NULL)
+}
+# Iterate the fars_dbf_to_csv across all files.
+purrr::map(1999:2010, fars_dbf_to_csv)
+```
+
+This code chunk reads all of the .dbf files in as unique .csv by year.  The `foreign` package is integral for this conversion.  
+
+```{r}
+clean_yearly_person_file <- function(year) {
+# 1. Read data in.
+  person_file <- paste0("data-raw/yearly_person_data/person_", year, ".csv")
+  df <- readr::read_csv(person_file)
+# 2. Convert all column names to lowercase.
+  colnames(df) <- tolower(colnames(df))
+  df <- df %>%
+# 3. Limit variables.
+    dplyr::select(st_case, veh_no, per_no, state, per_typ, lag_hrs, lag_mins,
+                inj_sev, age, alc_res, contains("drugres"), sex) %>%
+# 4. Limit to relevant `per_typ` and `inj_sev` values, then remove those variables.
+    dplyr::filter(per_typ == 1 & inj_sev == 4) %>%
+    dplyr::select(-per_typ, -inj_sev) %>%
+# 5. Create a `unique_id`. Note: to be unique, `year` needs to be pasted on.
+    tidyr::unite(unique_id, st_case, veh_no, per_no) %>% 
+    dplyr::mutate(year = year,
+                  unique_id = paste(unique_id, year, sep = "_")) %>%
+# 6. Limit to study states and then remove the `state` variable.
+    dplyr::filter(state %in% c(6,15,17,33,44,54)) %>%
+    dplyr::select(-state) %>%
+# 7. Convert `sex` to a factor with levels "Male" and "Female".
+    dplyr::mutate(sex = ifelse(sex == 9, NA, sex),
+                  sex = factor(sex, levels = c(1, 2),
+                               labels = c("Male", "Female"))) %>%
+# 8. Use measured alcohol blood level to create `Alcohol` (logical for whether
+# alcohol was present). Then remove the `alc_res` variable.
+    dplyr::mutate(alc_res = ifelse(alc_res > 94, NA, alc_res / 10),
+                  Alcohol = alc_res >= 0.01) %>%
+    dplyr::select(-alc_res) %>%
+# 9. Specify missing values for the lag minutes.
+    dplyr::mutate(lag_mins = ifelse(lag_mins == 99, NA, lag_mins))
+# 10. Save lag hours coded as missing as `NA`.
+    if(year <= 2008){
+      df <- df %>%
+        dplyr::mutate(lag_hrs = ifelse(lag_hrs %in% c(99, 999), NA, lag_hrs))
+      } else {
+      df <- df %>%
+        dplyr::mutate(lag_hrs = ifelse(lag_hrs == 999, NA, lag_hrs))
+}
+
+# 11. Limit to deaths within an hour of the accident then remove those variables.
+    df <- df %>%
+      dplyr::filter((lag_hrs < 1) | (lag_hrs == 1 & lag_mins == 0)) %>%
+      dplyr::select(-lag_hrs, -lag_mins)
+# 12. Save age values coded as missing as `NA`.
+    if(year <= 2008){
+      df <- df %>%
+        dplyr::mutate(age = ifelse(age == 99, NA, age))
+    } else {
+      df <- df %>%
+        dplyr::mutate(age = ifelse(age %in% c(998, 999), NA, age))
+}
+# 13. Use age to create age categories and then remove `age` variable.
+    df <- df %>%
+      dplyr::mutate(agecat = cut(age, breaks = c(0, 25, 45, 65, 1000),
+                                 labels = c("< 25 years","25--44 years",
+                                            "45--64 years","65 years +"),
+                                 include.lowest = TRUE, right = FALSE)) %>%
+      dplyr::select(-age)
+# 14. Gather all the columns with different drug listings (i.e., `drugres1`,
+# `drugres2`, `drugres3`). Convert from the numeric code listings to
+# drug categories.
+    gathered_df <- df %>%
+      tidyr::gather(drug_number, drug_type_raw, contains("drugres")) %>%
+      dplyr::mutate(drug_type = ifelse(drug_type_raw %in% 100:295,
+                                       "Narcotic", NA),
+                    drug_type = ifelse(drug_type_raw %in% 300:395,
+                                       "Depressant", drug_type),
+                    drug_type = ifelse(drug_type_raw %in% 400:495,
+                                       "Stimulant", drug_type),
+                    drug_type = ifelse(drug_type_raw %in% 600:695,
+                                       "Cannabinoid", drug_type),
+                    drug_type = ifelse(drug_type_raw %in% c(500:595, 700:996),
+                                       "Other", drug_type),
+                    drug_type = ifelse(drug_type_raw == 1,
+                                       "None", drug_type),
+                    drug_type = factor(drug_type)) %>%
+      dplyr::select(-drug_type_raw, -drug_number) %>%
+# 15. Filter out any observations where both alcohol and drug data is missing.
+    dplyr::filter(!(is.na(Alcohol) & is.na(drug_type)))
+# 16. Create a subset with only individuals with at least one non-missing
+# listing for drugs. (Write a sentence or two for each step in this pipe chain.)
+    non_missing_drugs <- gathered_df %>%
+      filter(!is.na(drug_type)) %>%
+      group_by(unique_id, drug_type) %>%
+      summarize(has_drug = TRUE) %>%
+      ungroup() %>%
+      mutate(row_num = 1:n()) %>%
+      spread(drug_type, has_drug, fill = FALSE) %>%
+      select(-row_num)
+# 17. Join this back into the full dataset. (Write a sentence or two for each
+# step in this pipe chain.)
+    df <- df %>%
+      dplyr::select(-contains("drugres")) %>%
+      dplyr::full_join(non_missing_drugs, by = "unique_id") %>%
+      dplyr::select(-None) %>%
+      tidyr::gather(drug_type, positive_for_drug, Alcohol, Cannabinoid,
+                    Depressant, Narcotic, Other, Stimulant) %>%
+      dplyr::mutate(drug_type = factor(drug_type)) %>%
+      unique()
+  
+return(df)
+}
+# 18. Iterate the clean_yearly_person_file function across study years to
+# create and save a single dataset.
+# Note: map_df() is similar to map(), but it binds elements of the
+# list resulting from map() together. To understand this step, try
+# running this code with map instead of map_df, check out documentation
+# for map and map_df, and look at the map_df() function by typing
+# `map_df` in your console.
+clean_fars <- map_df(1999:2010, clean_yearly_person_file)
+save(clean_fars, file = "data/clean_fars.RData")
+    
+```
+
+1: This intro to the function allows for a relative reference to all of the annual files which will be pulled for the final clean dataframe. The function name has just been set to `clean_yearly_person_file` with the only argument being `year`. The source files come from the "yearly_person_data" folder yearly .csv. Combining the constant "person_" and variable `year` reads the file while transforming it into a dataframe object. 
+
+2: Here the column names are transformed from uppercase to lowercase. This is used to standardize all of the column names between years, as the FARS system is not always consistant, and lowercase letters are easier to work with in R (a factor of standardization, which is always good form). As will be seen within the full code chunk, the last symbol ` %>% ` initiates a pipe, which will build the code with greater organization and less redundancy.  Piping also improves processing time, as dataframes are not saved between piped commands as in code sans piping. 
+
+3: The `select` function limits the dataframe to only the columns specified through the `dplyr` package.  Of the selected variables, st_case, veh_no, and per_no identifiers and the others coded values.  The `contains(drugres)` selection catches all results for drugs regardless of the drug identifier.  In other words, it will catch all columns containing the characters "drugres" All of these variables will be further cleaned in the next steps.
+
+4: Filtering by `per_typ` and `inj_sev` reduces the dataframes to only the records for both person type 1 (coded for driver) and injury severity 4 (coded for fatality).  The double equal sign indicates both parameters must be met exactly for the record to remain in the dataframe.  Following this `filter`, the two columns have served their purpose and are removed from the dataframe using a negative `select` (`select(-inj_sev)`). 
+
+5: The `unite` function from the `tidyr` package creates a new `unique_id` column containing st_case, veh_no, and per_no.  `Mutate` from dplyr is then used to first create a year column and then tag the year onto the end of the new `unique_id` with a separating underscore (`sep = "_"`).  This allowed for unique identifiers between annual dataframes as well. 
+
+6: The `dplyr` `filter` function was used to filter the states column to ids 6, 15, 17, 33, 44, and 54 (representing California, Hawaii, Illinois, New Hampshire, Rhode Island, and West Virginia).  All other records with state codes not in this subset are filtered out of the dataframe.  The `select` function is then used in the negative to unselect the state column, removing it from the dataframe as its purpose has been served.  
+
+7: `Mutate` is used to change the coded values for sex back into factor levels of "Male" and "Female" instead of the coded values "1" and "2".  The code for missing values in sex, "9", is replaced with `NA` to indicate within statistical analysis that the value is missing and not of value 9!  Factoring these levels is important, as a numerical class is not applicable within statistical interpretation.
+
+8: Alcohol blood levels were interpreted by the `mutate` function to replace levels above 94 (unknown test results) with `NA` and values less than 94 with the value over 10.  The threshold of .01 was then used as a logical test for the mutated alc_res value to populate the new column "Alcohol" with YES/NO responses for the presence of alcohol.  The alc_res column was then removed using the negative `select` function.  
+
+9: `Dplyr` was used to `mutate` the lag_mins variable, replacing the code "99" with its meaning, `NA`.
+
+10: Similar to comment 9, this mutate of the lag_hrs column replaces the codes "999" and "99" with the meaning `NA` for any year before 2009 or the code "999" with `NA` for years after 2008.  This is accomplished by use of a conditional if/else statement, which is necessary due to inconsistant coding practices for `NA` values prior to 2009. 
+
+11: Filter is used for the lag_hrs and lag_mins variables to remove any fatalities which occurred either less than 1 hour after the accident (`lag_hrs < 1`) or exactly 1 hour and 0 minutes after the accident (lag_hrs == 1 & lag_mins ==0).  The negative select function is then used to remove both the lag columns from the dataframe.
+
+12: Due again to inconsistant coding practices accross all years, the if/else statement is used to mutate the age column to replace code "99" with `NA` before 2009 (`if`) and codes "998" and "999" with `NA` for years after 2008 (`else`).
+
+13: The age column is used to create a new column, agecat for age category.  Breaks were specified within the age variable using the `dplyr` function `cut`.  The age categories defined by the breaks were then labelled with the corresponding ranges.  The include.lowest arguement is set to TRUE, indicating that the break value should be included in the next dataset as the lowest value, i.e. 25 should be included in the "25--44 years" category.  The age column was then removed using a negative `select`, as the age category would now supplant the precise age.
+
+14: The `tidyr` `gather` function is used to combine the multiple columns containing the character string "drugres" into one column called "drug_type" into a new gathered dataframe.  The "drug_number" column is created first, combining all of the codes from "drug_type_raw" which is derived from "drugres" columns.  The `mutate` function is used to create the "drug_type" column, populating it series based the appropriate codes.  First, "drug_type_raw" is queried for values between 100 and 295, which would correspond to the Narcotic drug codes.  If the value is in the range, "drug_type" will be populated with "Narcotic".  If it isn't in the 100 to 295 range, the mutate function moves to the else - the next level test for "Depressant" in the 300:395 range.  Multiple ifelse statements finally populate the drug_type column with the appropriate label classification.  The final line in the `mutate` converts the column drug_type to class factor.  Lastly, `dplyr` is used to unselect the drug_type_raw and drug_number columns, which are no longer needed.
+
+15: Filter is used with a BANG (!) in the negative to filter out records where both Alcohol and drug_type are `NA`s.
+
+16: A new dataframe object `non_missing_drugs` is created from `gathered_df`.  The second line `filter`s for drug_types which are not `NA`, removing all records with `NA` for drug_type.  The `group_by` function groups the records by drug_type and unique_id in preparation for the next function, `summarize`.  `Summarize` is used to specify that all grouped records are related to drugs (`TRUE`). `Ungroup` is used to to deconstruct the grouping organization.  `Mutate` is used to create a new column, numbering all rows in the dataframe. `Spread` determines if "drug_type" by the parameter "has_drug" is true, filling any absent values with `FALSE`.  Now that has_drug is fully populated, row_num can be unselected from the dataframe in the last line, removing the column.
+
+17: The df dataframe is being overwritten by the first line with the fully piped "new" df.  The second line unselects the "drugres" column, removing the column from the dataframe. `Full_join` is used to join the non_missing_drugs dataframe and df (as piped in), retaining everything from both dataframes in the merge as dictated by "full".  The join variable for this function is "unique_id." The next line unselects "None" to remove the column.  The `tidyr` `gather` function pulls drug type labels into the drug_type column. It also creates the column "positive_for_drug" populated with TRUE or FALSE for the drug_type.  The mutate function reclassifies drug_type as a factor. `Unique` limits the dataframe to unique records, eliminating any redundancy.  Lastly, `return(df)` tells the function to print the clean dataframe at last! 
+
+18: The `clean_yearly_person_file` function is called within the `map_df` function on each year 1999 to 2010.  The results of these yearly function calls are mapped to the clean_fars dataframe, and then saved as clean_fars to the file path specified.

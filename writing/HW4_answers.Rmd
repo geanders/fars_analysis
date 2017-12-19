@@ -1,0 +1,67 @@
+---
+title: "HW 4 Answers"
+author: "Rebecca Foos"
+date: "October 15, 2017"
+output: word_document
+---
+
+
+**1. In the in-course exercises, we have been analyzing data with accident as the observation unit. This study uses a different observation unit. What is the unit of observation in the Brady and Li study? When you download the FARS data for a year, you get a zipped folder with several different datasets. Which of the FARS datasets provides information at this observation level (and so will be the one you want to use for this analysis)?** 
+
+The unit of observation for the study was drivers who died within one hour of the accident.  The person files within the zip folder contain information related to the individuals involved in the crashes, including driver status and fatality outcomes.
+
+**2. This study only analyzes a subset of the available FARS data. Enumerate all of the constraints that are used by the study to create the subset of data they use in their study (e.g., years, states, person type, injury type). Go through the FARS documentation and provide the variable names for the variables you will use to create filter statements in R to limit the data to this subset. Provide the values that you will want to keep from each variable.**
+
+YEAR from file source :: Timeframe (years): January 1, 1999 to December 31, 2010
+LAG_HRS < 1 | (LAG_HRS == 1 & LAG_MINS == 0) :: Time of relative death: Fatality within 1 hour of crash or exactly 1 hour 0 minutes, NA values excluded
+STATE = 6,15,17,33,44,54 :: States (narrowed down to 6 that routinely test drivers for drugs): California, Hawaii, Illinois, New Hampshire, Rhode Island, West Virginia 
+PER_TYP = 1 :: Person type: driver of the motor vehicle
+INJ_SEV = 4 :: Injury type: fatality 
+DRUGRES et al :: Testing post-accident: yes, for drugs and alcohol, NAs excluded 
+
+**3. The study gives results stratified by age category, year, year category (e.g., 1999-2002), alcohol level, non-alcohol drug category, and sex. For each of these stratifications, give the variable name for the FARS variable you could use to make the split (i.e., the column name you would use in a group_by statement to create summaries within each category or the column name you would mutate to generate a categorical variable).** 
+
+Age category may be derived from the AGE variable.  Both year and year category may be derived from the DEATH_YR column, pulling out the year and also the categorical year range for the crash records.  Alcohol level will be gleaned from the ALC_RES variable, reporting the BAC result of the test for alcohol on a continuous range.  The non-alcohol drug category will likewise be taken from several DRUG_RES columns, each representing the drug results for a different class of drug.  The SEX variable will be used to factor by gender, replacing the unknown 99 variable with NA for missing data.
+
+**Describe how each of these variables are coded in the data. Are there any values for missing data that you'll need to mutate to NA values in R? Are there any cases where coding has changed over the study period?** 
+
+Almost all of the data for FARS is coded by numbers representing various test results and other metadata.  Some of the codes correspond directly to the variable result, such as AGE (0-120 representing the true age of the individual in years), DEATH_YR (4 digit format for the year of the crash), or ALC_RES (result of the BAC test for alcohol as the actual percentage from 0 to 93).  However, all of these categories also contain codes for missing or unreported data, usually a 99 or 999 code.  Other codes representing unknown values follow similar trends and require interpretation with data analysis to prevent them from being used as real values. Two basic coding protocols were followed within the course of the FARS data, one prior to 2009 and the other from 2009 forward.  Certain ifelse statements or filter statements will have to be used in the data processing in order to interpret the "special" codes appropriately per the year of the results.  A list of all variable codes can be found below.
+
+AGE (since 2009): 
+0: less than one year 
+1-120: age in years 
+998: not reported 
+999: unknown 	 
+
+DEATH_YR: 
+0 or 8888: non-fatal
+xxxx: year of death 
+9999: unknown
+
+ALC_RES:
+0-93: BAC test result
+94: 94 or greater
+95: test refused
+96: none given
+97: test performed, results unknown 
+98: positive test, results unknown 
+99: unknown if tested 
+	
+DRUG_RES: 
+0: not tested for drugs
+1: no drugs reported
+95: not reported
+100-295: positive for narcotic
+300-395: positive for depressant
+400-495: positive for stimulant
+600-695: positive for cannabinoid
+996: positive for other drugs
+997: tested, results unknown
+998: positive for drugs, type unknown
+999: unknown/not reported
+
+SEX: 
+1: male
+2: female
+8: not reported
+9: unknown 
